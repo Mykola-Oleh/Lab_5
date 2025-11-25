@@ -1,7 +1,7 @@
 #include <chrono>
 #include <future>
 #include <iostream>
-#include <syncstream>
+#include <syncstream> 
 #include <string>
 #include <thread>
 #include <utility>
@@ -15,52 +15,63 @@ void task(const string& name, chrono::seconds dur) {
     sync_out << "Completed: " << name << '\n';
 }
 
-
-void chain_B1_D(shared_future<void> f_B2) {
-    task("B1 (slow) depends on A1", 7s);
-    f_B2.wait();
-    task("D (quick) depends on B1,B2", 1s);
-}
-
 void work() {
     using clock = chrono::steady_clock;
     auto t0 = clock::now();
+    {
+        osyncstream sync_out_start(cout);
+        sync_out_start << "--- Starting Work (Variant 12) ---" << '\n';
+    }
+    cout.flush();
 
-    osyncstream sync_out_start(cout);
-    sync_out_start << "--- Starting Work (Variant 12) ---" << '\n';
-    sync_out_start.emit();
+    promise<void> p_A1;
+    shared_future<void> f_A1 = p_A1.get_future().share();
 
-    auto future_A1_status = async(launch::async, task, "A1 (slow)", 7s);
+    promise<void> p_B2;
+    shared_future<void> f_B2 = p_B2.get_future().share();
 
-    auto future_A2_status = async(launch::async, task, "A2 (quick)", 1s);
+    auto future_A1 = async(launch::async, [&p_A1]() {
+        task("A1 (slow)", 7s);
+        p_A1.set_value();
+        });
 
-    future_A2_status.wait();
+    auto future_A2_chain = async(launch::async, [f_A1, &p_B2]() {
+        task("A2 (quick)", 1s);
 
-    promise<void> p_b2;
-    shared_future<void> f_b2 = p_b2.get_future().share();
+        task("B2 (quick) depends on A2", 1s);
+        p_B2.set_value();
 
-    auto future_B2 = async(launch::async, [&p_b2]() {task("B2 (quick) depends on A2", 1s);p_b2.set_value();});
+        task("C2 (quick) depends on A2", 1s);
 
-    auto future_C2 = async(launch::async, task, "C2 (quick) depends on A2", 1s);
+        f_A1.wait();
 
-    future_A1_status.wait();
+        task("C1 (quick) depends on A1", 1s);
+        });
 
-    auto future_B1_D = async(launch::async, chain_B1_D, f_b2);
 
-    auto future_C1 = async(launch::async, task, "C1 (quick) depends on A1", 1s);
+    auto future_B1_D = async(launch::async, [f_A1, f_B2]() {
+        f_A1.wait();
+
+        task("B1 (slow) depends on A1", 7s);
+
+        f_B2.wait();
+
+        task("D (quick) depends on B1,B2", 1s);
+        });
 
     future_B1_D.get();
 
-    future_B2.wait();
-    future_C1.wait();
-    future_C2.wait();
+    future_A1.wait();
+    future_A2_chain.wait();
 
     auto t1 = clock::now();
     chrono::duration<double> duration = t1 - t0;
+
     {
         osyncstream sync_out_end(cout);
         sync_out_end << "--- All calculations completed ---" << '\n';
         sync_out_end << "Execution time: " << duration.count() << " seconds" << '\n';
+        sync_out_end << "Work is done!\n";
     }
 }
 
